@@ -2,6 +2,11 @@
 #include "Main.h"
 #include "NitemareArchive.h"
 #include "Archive/EntryType/EntryType.h"
+#include "Graphics/Palette/Palette.h"
+#include "Graphics/SImage/SImage.h"
+#include "Graphics/SImage/SIFormat.h"
+
+#include <filesystem>
 
 using namespace slade;
 
@@ -9,6 +14,8 @@ namespace
 {
 constexpr size_t MapHeaderSize = 514;
 constexpr size_t MapSize       = 64 * 64 * 2;
+constexpr int    MapPreviewScale = 8;
+constexpr uint32_t SoundRate = 10989;
 
 uint16_t le16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 uint32_t le32(const uint8_t* p)
@@ -16,16 +23,17 @@ uint32_t le32(const uint8_t* p)
 	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8)
 		   | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
-void put16(MemChunk& mc, uint16_t value)
+void append16(vector<uint8_t>& data, uint16_t value)
 {
-	const uint8_t b[2] = { static_cast<uint8_t>(value), static_cast<uint8_t>(value >> 8) };
-	mc.write(b, 2);
+	data.push_back(static_cast<uint8_t>(value));
+	data.push_back(static_cast<uint8_t>(value >> 8));
 }
-void put32(MemChunk& mc, uint32_t value)
+void append32(vector<uint8_t>& data, uint32_t value)
 {
-	const uint8_t b[4] = { static_cast<uint8_t>(value), static_cast<uint8_t>(value >> 8),
-		static_cast<uint8_t>(value >> 16), static_cast<uint8_t>(value >> 24) };
-	mc.write(b, 4);
+	data.push_back(static_cast<uint8_t>(value));
+	data.push_back(static_cast<uint8_t>(value >> 8));
+	data.push_back(static_cast<uint8_t>(value >> 16));
+	data.push_back(static_cast<uint8_t>(value >> 24));
 }
 
 bool detectMap(const uint8_t* data, size_t size)
@@ -88,6 +96,127 @@ string datEntryName(const uint8_t* data, size_t size, unsigned index)
 		return fmt::format("MUSIC{:04}.MID", index);
 	return fmt::format("ENTRY{:04}.BIN", index);
 }
+
+Palette nitemarePalette(string_view archive_filename)
+{
+	Palette palette;
+	for (unsigned i = 0; i < 256; ++i)
+		palette.setColour(i, ColRGBA(i, i, i, 255));
+
+	const auto directory = std::filesystem::path{ archive_filename }.parent_path();
+	for (const auto* name : { "GAME.PAL", "game.pal" })
+	{
+		MemChunk pcx;
+		if (!pcx.importFile((directory / name).string()) || pcx.size() < 769)
+			continue;
+		const auto palette_marker = pcx.size() - 769;
+		if (pcx[palette_marker] == 12)
+		{
+			palette.loadMem(pcx.data() + palette_marker + 1, 768);
+			break;
+		}
+	}
+	return palette;
+}
+
+bool makeImagePng(const uint8_t* data, size_t size, Palette& palette, MemChunk& png)
+{
+	if (size < 11)
+		return false;
+	const int width = data[0];
+	const int height = data[1];
+	if (!width || !height || size != static_cast<size_t>(10 + width * height))
+		return false;
+
+	// Index 31 is the transparent sprite colour in Nitemare 3-D. Only make it
+	// transparent when it dominates the image border, so wall textures retain
+	// any legitimate pixels using the same palette index.
+	size_t border_pixels = 0;
+	size_t border_transparent = 0;
+	for (int x = 0; x < width; ++x)
+		for (int y : { 0, height - 1 })
+		{
+			++border_pixels;
+			if (data[10 + x * height + y] == 31) ++border_transparent;
+		}
+	for (int y = 1; y + 1 < height; ++y)
+		for (int x : { 0, width - 1 })
+		{
+			++border_pixels;
+			if (data[10 + x * height + y] == 31) ++border_transparent;
+		}
+	const bool transparent_31 = border_pixels && border_transparent * 2 >= border_pixels;
+
+	SImage image;
+	image.create(width, height, SImage::Type::PalMask, &palette);
+	for (int x = 0; x < width; ++x)
+		for (int y = 0; y < height; ++y)
+		{
+			const auto pixel = data[10 + x * height + y];
+			image.setPixel(x, y, pixel, transparent_31 && pixel == 31 ? 0 : 255);
+		}
+	return SIFormat::getFormat("png")->saveImage(image, png, &palette);
+}
+
+ColRGBA mapWallColour(uint8_t wall)
+{
+	if (!wall)
+		return ColRGBA(24, 24, 28, 255);
+	return ColRGBA(
+		static_cast<uint8_t>(55 + (wall * 73u) % 176u),
+		static_cast<uint8_t>(55 + (wall * 131u) % 176u),
+		static_cast<uint8_t>(55 + (wall * 197u) % 176u),
+		255);
+}
+
+bool makeMapPng(const uint8_t* data, size_t size, MemChunk& png)
+{
+	if (size != MapSize)
+		return false;
+	SImage image;
+	image.create(64 * MapPreviewScale, 64 * MapPreviewScale, SImage::Type::RGBA);
+	for (int y = 0; y < 64; ++y)
+		for (int x = 0; x < 64; ++x)
+		{
+			const auto cell = static_cast<size_t>(y * 64 + x) * 2;
+			const auto wall = data[cell];
+			const auto object = data[cell + 1];
+			const auto wall_colour = mapWallColour(wall);
+			for (int py = 0; py < MapPreviewScale; ++py)
+				for (int px = 0; px < MapPreviewScale; ++px)
+				{
+					auto colour = wall_colour;
+					if (px == 0 || py == 0)
+						colour = ColRGBA(colour.r / 2, colour.g / 2, colour.b / 2, 255);
+					if (object && px >= 2 && px <= 5 && py >= 2 && py <= 5)
+						colour = ColRGBA(255, static_cast<uint8_t>(32 + object % 96), 32, 255);
+					image.setPixel(x * MapPreviewScale + px, y * MapPreviewScale + py, colour);
+				}
+		}
+	return SIFormat::getFormat("png")->saveImage(image, png);
+}
+
+vector<uint8_t> makeWave(const uint8_t* samples, size_t size)
+{
+	vector<uint8_t> wave;
+	const auto padding = static_cast<uint32_t>(size & 1u);
+	wave.reserve(44 + size + padding);
+	wave.insert(wave.end(), { 'R', 'I', 'F', 'F' });
+	append32(wave, static_cast<uint32_t>(36 + size + padding));
+	wave.insert(wave.end(), { 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ' });
+	append32(wave, 16);
+	append16(wave, 1); // PCM
+	append16(wave, 1); // mono
+	append32(wave, SoundRate);
+	append32(wave, SoundRate); // 8-bit mono: one byte per sample
+	append16(wave, 1);
+	append16(wave, 8);
+	wave.insert(wave.end(), { 'd', 'a', 't', 'a' });
+	append32(wave, static_cast<uint32_t>(size));
+	wave.insert(wave.end(), samples, samples + size);
+	if (padding) wave.push_back(0);
+	return wave;
+}
 } // namespace
 
 bool NitemareArchive::open(MemChunk& mc)
@@ -102,25 +231,25 @@ bool NitemareArchive::open(MemChunk& mc)
 
 	ArchiveModSignalBlocker blocker{ *this };
 	header_.clear();
-	original_sizes_.clear();
-	original_offsets_.clear();
-	original_data_.clear();
+	original_data_.assign(data, data + size);
 	if (kind_ == Kind::Map)
 	{
 		header_.assign(data, data + MapHeaderSize);
 		const auto count = le16(data);
 		for (unsigned i = 0; i < count; ++i)
 		{
-			auto entry = std::make_shared<ArchiveEntry>(fmt::format("MAP{:02}.N3M", i + 1), MapSize);
-			entry->importMem(data + MapHeaderSize + i * MapSize, MapSize);
-			EntryType::detectEntryType(*entry);
+			MemChunk preview;
+			if (!makeMapPng(data + MapHeaderSize + i * MapSize, MapSize, preview)) return false;
+			auto entry = std::make_shared<ArchiveEntry>(fmt::format("MAP{:02}.PNG", i + 1), preview.size());
+			entry->importMemChunk(preview);
+			entry->setType(EntryType::fromId("png"), 255);
 			entry->setState(ArchiveEntry::State::Unmodified);
 			rootDir()->addEntry(entry);
-			original_sizes_.push_back(MapSize);
 		}
 	}
 	else if (kind_ == Kind::Img)
 	{
+		auto palette = nitemarePalette(filename());
 		const auto first = le32(data + 4);
 		header_.assign(data, data + first);
 		size_t pos = first;
@@ -128,33 +257,43 @@ bool NitemareArchive::open(MemChunk& mc)
 		while (pos < size)
 		{
 			const size_t entry_size = 10 + static_cast<size_t>(data[pos]) * data[pos + 1];
-			auto entry = std::make_shared<ArchiveEntry>(fmt::format("IMAGE{:04}.N3I", i), entry_size);
-			entry->importMem(data + pos, entry_size);
-			EntryType::detectEntryType(*entry);
+			MemChunk png;
+			if (!makeImagePng(data + pos, entry_size, palette, png)) return false;
+			auto entry = std::make_shared<ArchiveEntry>(fmt::format("IMAGE{:04}.PNG", i), png.size());
+			entry->importMemChunk(png);
+			entry->setType(EntryType::fromId("png"), 255);
 			entry->setState(ArchiveEntry::State::Unmodified);
 			rootDir()->addEntry(entry);
-			original_sizes_.push_back(entry_size);
 			pos += entry_size;
 			++i;
 		}
 	}
 	else
 	{
+		const bool sound_archive = strutil::equalCI(filename(false), "SND.DAT");
 		const auto first = le32(data + 2);
 		header_.assign(data, data + first);
-		original_data_.assign(data, data + size);
 		for (unsigned i = 0; i * 6 + 6 <= first; ++i)
 		{
 			const auto entry_size = le16(data + i * 6);
 			const auto offset = le32(data + i * 6 + 2);
-			const auto name = entry_size ? datEntryName(data + offset, entry_size, i) : fmt::format("EMPTY{:04}.BIN", i);
-			auto entry = std::make_shared<ArchiveEntry>(name, entry_size);
-			if (entry_size) entry->importMem(data + offset, entry_size);
-			EntryType::detectEntryType(*entry);
+			const bool raw_sound = sound_archive && i >= 34 && entry_size;
+			const auto name = raw_sound ? fmt::format("SOUND{:04}.WAV", i)
+				: (entry_size ? datEntryName(data + offset, entry_size, i) : fmt::format("EMPTY{:04}.BIN", i));
+			auto entry = std::make_shared<ArchiveEntry>(name);
+			if (raw_sound)
+			{
+				auto wave = makeWave(data + offset, entry_size);
+				entry->importMem(wave.data(), wave.size());
+				entry->setType(EntryType::fromId("snd_wav"), 255);
+			}
+			else
+			{
+				if (entry_size) entry->importMem(data + offset, entry_size);
+				EntryType::detectEntryType(*entry);
+			}
 			entry->setState(ArchiveEntry::State::Unmodified);
 			rootDir()->addEntry(entry);
-			original_sizes_.push_back(entry_size);
-			original_offsets_.push_back(offset);
 			if (entry_size && offset + entry_size == size) break;
 		}
 	}
@@ -166,83 +305,8 @@ bool NitemareArchive::open(MemChunk& mc)
 bool NitemareArchive::write(MemChunk& mc, bool update)
 {
 	mc.clear();
-	bool data_already_written = false;
-	if (kind_ == Kind::Unknown) return false;
-	if (kind_ == Kind::Map)
-	{
-		if (numEntries() == 0 || numEntries() > 64)
-		{
-			global::error = "Nitemare MAP must contain 1 to 64 maps"; return false;
-		}
-		for (unsigned i = 0; i < numEntries(); ++i)
-			if (entryAt(i)->size() != MapSize)
-			{
-				global::error = "Every Nitemare map entry must be exactly 8192 bytes"; return false;
-			}
-		header_[0] = static_cast<uint8_t>(numEntries());
-		header_[1] = static_cast<uint8_t>(numEntries() >> 8);
-		mc.write(header_.data(), header_.size());
-	}
-	else if (kind_ == Kind::Img)
-	{
-		if (numEntries() != original_sizes_.size())
-		{
-			global::error = "Adding or removing Nitemare IMG records is not supported"; return false;
-		}
-		for (unsigned i = 0; i < numEntries(); ++i)
-			if (entryAt(i)->size() != original_sizes_[i])
-			{
-				global::error = "Resizing Nitemare IMG records would invalidate its lookup tables"; return false;
-			}
-		mc.write(header_.data(), header_.size());
-	}
-	else
-	{
-		bool same_layout = numEntries() == original_sizes_.size();
-		for (unsigned i = 0; same_layout && i < numEntries(); ++i)
-			same_layout = entryAt(i)->size() == original_sizes_[i];
-		if (same_layout)
-		{
-			mc.write(original_data_.data(), original_data_.size());
-			for (unsigned i = 0; i < numEntries(); ++i)
-				if (entryAt(i)->size())
-				{
-					mc.seek(original_offsets_[i], SEEK_SET);
-					mc.write(entryAt(i)->rawData(), entryAt(i)->size());
-				}
-			mc.seek(0, SEEK_END);
-			data_already_written = true;
-			goto finish_entries;
-		}
-		if (numEntries() == 0 || numEntries() * 6 > header_.size())
-		{
-			global::error = "Too many entries for the original Nitemare DAT directory"; return false;
-		}
-		uint32_t offset = header_.size();
-		for (unsigned i = 0; i < numEntries(); ++i)
-		{
-			if (entryAt(i)->size() > 65535)
-			{
-				global::error = "Nitemare DAT entries cannot exceed 65535 bytes"; return false;
-			}
-			put16(mc, static_cast<uint16_t>(entryAt(i)->size()));
-			put32(mc, entryAt(i)->size() ? offset : 0);
-			if (entryAt(i)->size()) offset += entryAt(i)->size();
-		}
-		if (mc.size() < header_.size())
-		{
-			const vector<uint8_t> padding(header_.size() - mc.size(), 0);
-			mc.write(padding.data(), padding.size());
-		}
-	}
-	finish_entries:
-	for (unsigned i = 0; i < numEntries(); ++i)
-	{
-		auto* entry = entryAt(i);
-		if (!data_already_written)
-			if (entry->size()) mc.write(entry->rawData(), entry->size());
-		if (update) entry->setState(ArchiveEntry::State::Unmodified);
-	}
+	if (original_data_.empty()) return false;
+	mc.write(original_data_.data(), original_data_.size());
 	return true;
 }
 
