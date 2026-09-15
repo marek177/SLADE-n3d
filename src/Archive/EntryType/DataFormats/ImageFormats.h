@@ -150,6 +150,25 @@ public:
 	}
 };
 
+class NitemareImageDataFormat : public EntryDataFormat
+{
+public:
+	NitemareImageDataFormat() : EntryDataFormat("img_nitemare") {}
+	int isThisFormat(MemChunk& mc) override
+	{
+		if (mc.size() < 11) return MATCH_FALSE;
+		const size_t width = mc[0], height = mc[1];
+		return width && height && mc.size() == 10 + width * height ? MATCH_TRUE : MATCH_FALSE;
+	}
+};
+
+class NitemareMapImageDataFormat : public EntryDataFormat
+{
+public:
+	NitemareMapImageDataFormat() : EntryDataFormat("img_nitemare_map") {}
+	int isThisFormat(MemChunk& mc) override { return mc.size() == 8192 ? MATCH_MAYBE : MATCH_FALSE; }
+};
+
 class TGADataFormat : public EntryDataFormat
 {
 public:

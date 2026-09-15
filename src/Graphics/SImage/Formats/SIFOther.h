@@ -639,6 +639,68 @@ private:
 	}
 };
 
+class SIFNitemareImage : public SIFormat
+{
+public:
+	SIFNitemareImage() : SIFormat("nitemare", "Nitemare 3-D Graphic", "n3i", 200) {}
+	bool isThisFormat(MemChunk& mc) override
+	{
+		return EntryDataFormat::format("img_nitemare")->isThisFormat(mc) >= EntryDataFormat::MATCH_PROBABLY;
+	}
+	SImage::Info info(MemChunk& mc, int index) override
+	{
+		SImage::Info info;
+		info.width = mc[0]; info.height = mc[1];
+		info.colformat = SImage::Type::PalMask; info.format = id_;
+		return info;
+	}
+protected:
+	bool readImage(SImage& image, MemChunk& data, int index) override
+	{
+		auto inf = info(data, index);
+		if (!inf.width || !inf.height || data.size() != static_cast<size_t>(10 + inf.width * inf.height))
+			return false;
+		image.create(inf);
+		auto* pixels = imageData(image);
+		auto* mask = imageMask(image);
+		memset(mask, 255, inf.width * inf.height);
+		for (int x = 0; x < inf.width; ++x)
+			for (int y = 0; y < inf.height; ++y)
+				pixels[y * inf.width + x] = data[10 + x * inf.height + y];
+		return true;
+	}
+};
+
+class SIFNitemareMap : public SIFormat
+{
+public:
+	SIFNitemareMap() : SIFormat("nitemare_map", "Nitemare 3-D Map Preview", "n3m", 100) {}
+	bool isThisFormat(MemChunk& mc) override { return mc.size() == 8192; }
+	SImage::Info info(MemChunk& mc, int index) override
+	{
+		SImage::Info info;
+		info.width = 64; info.height = 64;
+		info.colformat = SImage::Type::PalMask; info.format = id_;
+		return info;
+	}
+protected:
+	bool readImage(SImage& image, MemChunk& data, int index) override
+	{
+		if (data.size() != 8192) return false;
+		image.create(info(data, index));
+		auto* pixels = imageData(image);
+		auto* mask = imageMask(image);
+		memset(mask, 255, 4096);
+		for (size_t i = 0; i < 4096; ++i)
+		{
+			const auto wall = data[i * 2];
+			const auto object = data[i * 2 + 1];
+			pixels[i] = object ? static_cast<uint8_t>(128 + object % 128) : wall;
+		}
+		return true;
+	}
+};
+
 class SIFWolfPic : public SIFormat
 {
 public:

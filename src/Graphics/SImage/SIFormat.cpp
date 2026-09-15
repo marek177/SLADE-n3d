@@ -551,6 +551,8 @@ void SIFormat::initFormats()
 	new SIFBuildTile();
 	new SIFHeretic2M8();
 	new SIFHeretic2M32();
+	new SIFNitemareImage();
+	new SIFNitemareMap();
 	new SIFWolfPic();
 	new SIFWolfSprite();
 }

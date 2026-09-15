@@ -238,6 +238,7 @@ void registerArchive(sol::state& lua)
 	REGISTER_ARCHIVE(PodArchive);
 	REGISTER_ARCHIVE(ChasmBinArchive);
 	REGISTER_ARCHIVE(LabArchive);
+	REGISTER_ARCHIVE(NitemareArchive);
 #undef REGISTER_ARCHIVE
 }
 

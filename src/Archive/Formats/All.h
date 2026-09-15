@@ -12,6 +12,7 @@
 #include "LabArchive.h"
 #include "LfdArchive.h"
 #include "LibArchive.h"
+#include "NitemareArchive.h"
 #include "PakArchive.h"
 #include "PodArchive.h"
 #include "ResArchive.h"

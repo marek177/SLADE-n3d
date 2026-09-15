@@ -216,3 +216,13 @@ public:
 
 	int isThisFormat(MemChunk& mc) override { return LabArchive::isLabArchive(mc) ? MATCH_TRUE : MATCH_FALSE; }
 };
+
+class NitemareArchiveDataFormat : public EntryDataFormat
+{
+public:
+	NitemareArchiveDataFormat() : EntryDataFormat("archive_nitemare") {}
+	int isThisFormat(MemChunk& mc) override
+	{
+		return NitemareArchive::isNitemareArchive(mc) ? MATCH_TRUE : MATCH_FALSE;
+	}
+};

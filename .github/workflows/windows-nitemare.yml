@@ -1,0 +1,67 @@
+name: Windows x64 Nitemare3D build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - nitemare3d-windows
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Enable MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install native dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            bzip2:x64-windows-static `
+            fluidsynth:x64-windows-static `
+            freetype:x64-windows-static `
+            ftgl:x64-windows-static `
+            libpng:x64-windows-static `
+            lua:x64-windows-static `
+            mpg123:x64-windows-static `
+            sfml:x64-windows-static `
+            zlib:x64-windows-static
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B out/build/win-x64-release -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DBUILD_WX=ON `
+            -DBUILD_PK3=ON `
+            -DSLADE_EXE_DIR=dist/build64
+
+      - name: Build
+        run: cmake --build out/build/win-x64-release --config RelWithDebInfo --parallel 2
+
+      - name: Assemble portable package
+        shell: pwsh
+        run: |
+          $package = "package/SLADE-Nitemare3D-Windows-x64"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "dist/build64/SLADE.exe" $package
+          Copy-Item "dist/slade.pk3" $package
+          Copy-Item "README_NITEMARE3D_SK.txt" $package
+          Copy-Item "NITEMARE3D_SUPPORT.md" $package
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLADE-Nitemare3D-Windows-x64
+          path: package/SLADE-Nitemare3D-Windows-x64
+          if-no-files-found: error
+          compression-level: 9

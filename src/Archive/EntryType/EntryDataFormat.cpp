@@ -207,6 +207,8 @@ void EntryDataFormat::initBuiltinFormats()
 	registerDataFormat<BMPDataFormat>();
 	registerDataFormat<GIFDataFormat>();
 	registerDataFormat<PCXDataFormat>();
+	registerDataFormat<NitemareImageDataFormat>();
+	registerDataFormat<NitemareMapImageDataFormat>();
 	registerDataFormat<TGADataFormat>();
 	registerDataFormat<TIFFDataFormat>();
 	registerDataFormat<JPEGDataFormat>();
@@ -272,6 +274,7 @@ void EntryDataFormat::initBuiltinFormats()
 	registerDataFormat<PodArchiveDataFormat>();
 	registerDataFormat<ChasmBinArchiveDataFormat>();
 	registerDataFormat<SinArchiveDataFormat>();
+	registerDataFormat<NitemareArchiveDataFormat>();
 	registerDataFormat<MUSDataFormat>();
 	registerDataFormat<MIDIDataFormat>();
 	registerDataFormat<XMIDataFormat>();
